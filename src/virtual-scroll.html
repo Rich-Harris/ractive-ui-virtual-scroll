@@ -1,0 +1,244 @@
+<div class='vs-viewport {{class}}' style='{{style}}'>
+	<ul class='vs-list'>
+		{{#visibleItems}}
+			<li>{{>content}}</li>
+		{{/visibleItems}}
+	</ul>
+</div>
+
+
+<style>
+	.vs-viewport {
+		position: relative;
+		overflow: auto;
+	}
+
+	.vs-list {
+		position: relative;
+	}
+</style>
+
+
+<script>
+	var rAF, animation;
+
+	/*
+		TODO
+		====
+
+		* requestAnimationFrame fallback
+		* handle items of differing height
+		* handle resize events
+		* debouncing/throttling
+	*/
+
+	rAF = requestAnimationFrame; // TODO fallback shim
+
+	component.exports = {
+		isolated: true,
+
+		data: {
+			itemheight: 'auto',
+			top: 0
+		},
+
+		init: function () {
+
+			var self = this,
+				items,
+				ul,
+				ulComputedStyle,
+				viewportComputedStyle,
+				ulInnerHeight,
+				ulPadding,
+				redrawPending,
+				timeout;
+
+			items = this.get( 'items' );
+			this.itemheight = this.get( 'itemheight' );
+
+			this.viewport = this.find( '.vs-viewport' );
+			ul = this.ul = this.find( 'ul' );
+
+			ulComputedStyle = window.getComputedStyle( ul );
+			viewportComputedStyle = window.getComputedStyle( this.viewport );
+
+			if ( this.itemheight === 'auto' ) {
+				// determine average item height
+				sample = items.slice( 0, 50 );
+
+				this.set( 'visibleItems', sample );
+				this.itemheight = convertPx( ulComputedStyle.height ) / sample.length;
+			}
+
+			this.defaultPaddingTop = convertPx( ulComputedStyle.paddingTop );
+			this.defaultPaddingBottom = convertPx( ulComputedStyle.paddingBottom );
+
+			this.totalSpacingTop =
+				this.defaultPaddingTop +
+				convertPx( ulComputedStyle.marginTop ) +
+				convertPx( viewportComputedStyle.paddingTop ) +
+				convertPx( viewportComputedStyle.marginTop );
+
+			this.totalSpacingBottom =
+				this.defaultPaddingBottom +
+				convertPx( ulComputedStyle.marginBottom ) +
+				convertPx( viewportComputedStyle.paddingBottom ) +
+				convertPx( viewportComputedStyle.marginBottom );
+
+			this.topBuffer = 150 + this.totalSpacingTop;
+			this.bottomBuffer = 150 + this.totalSpacingBottom;
+
+			// add scroll handler
+			this.viewport.addEventListener( 'scroll', function scrollHandler () {
+				if ( !redrawPending ) {
+					rAF( updateItems );
+				}
+			});
+
+
+			this.observe({
+				items: function ( newItems ) {
+					items = newItems;
+					rAF( updateItems );
+				},
+				'max-height': function ( max ) {
+					if ( max !== undefined ) {
+						this.viewport.style.maxHeight = ( typeof max === 'number' ? max + 'px' : max );
+					}
+				}
+			});
+
+			this.on({
+				alert: function () {
+					alert( 'whee!' );
+				}
+			});
+
+
+			function updateItems () {
+				self.update( true );
+			}
+
+			function update () {
+				self.update();
+			}
+		},
+
+		update: function ( force ) {
+			var self = this, ul, items, scrollTop, top, bottom, first, last, offsetHeight;
+
+			clearTimeout( this.timeout );
+
+			ul = this.ul;
+			items = this.get( 'items' );
+
+			scrollTop = this.viewport.scrollTop;
+			offsetHeight = this.viewport.offsetHeight;
+
+			top = scrollTop - this.topBuffer;
+			bottom = scrollTop + offsetHeight + this.bottomBuffer;
+
+			first = Math.max( 0, Math.round( top / this.itemheight ) );
+			last = Math.min( Math.round( bottom / this.itemheight ), items.length );
+
+			if ( force || first !== this._first || last !== this._last ) {
+				this.merge( 'visibleItems', items.slice( first, last ) );
+
+				this._first = first;
+				this._last = last;
+
+				ul.style.pointerEvents = 'none';
+				ul.style.paddingTop = (this.defaultPaddingTop + (this.itemheight * first)) + 'px';
+				ul.style.paddingBottom = (this.defaultPaddingBottom + (this.itemheight * (items.length - last))) + 'px';
+
+				if ( this.viewport.offsetHeight > offsetHeight ) {
+					// viewport has grown as a result of the change; we need to schedule another update!
+					rAF( function () {
+						self.update();
+					});
+				}
+			}
+
+			// After the scroll has finished, we need to re-enable pointer events
+			// in case we're listening for clicks etc
+			this.timeout = setTimeout( function endScroll () {
+				ul.style.pointerEvents = '';
+			}, 100 );
+		},
+
+		ensureVisible: function ( index ) {
+			var scrollTop, height, firstVisible, lastVisible, targetScrollTop;
+
+			scrollTop = this.viewport.scrollTop;
+
+			firstVisible = Math.ceil( ( scrollTop - this.totalSpacingTop ) / this.itemheight );
+
+			if ( index < firstVisible ) {
+				targetScrollTop = ( index * this.itemheight ) + this.totalSpacingTop;
+				animateScroll( this.viewport, targetScrollTop );
+				return;
+			}
+
+			height = this.viewport.offsetHeight;
+			lastVisible = Math.floor( ( scrollTop - this.totalSpacingTop + height ) / this.itemheight ) - 1;
+
+			if ( index > lastVisible ) {
+				targetScrollTop = ( ( index + 1 ) * this.itemheight ) - ( height - this.totalSpacingTop );
+				animateScroll( this.viewport, targetScrollTop );
+				return;
+			}
+		}
+	};
+
+	function animateScroll ( viewport, targetScrollTop ) {
+		var startTime, startScrollTop, delta, running, duration = 200;
+
+		if ( animation ) {
+			animation.stop();
+		}
+
+		animation = {
+			stop: function () {
+				running = false;
+			}
+		};
+
+		startTime = window.performance.now();
+
+		startScrollTop = viewport.scrollTop;
+		delta = targetScrollTop - startScrollTop;
+
+		function loop () {
+			var timeNow, elapsed;
+
+			if ( !running ) {
+				return;
+			}
+
+			timeNow = window.performance.now();
+			elapsed = timeNow - startTime;
+
+			if ( elapsed > duration ) {
+				viewport.scrollTop = targetScrollTop;
+				return;
+			}
+
+			pos = ease( elapsed / duration );
+			viewport.scrollTop = startScrollTop + ( pos * delta );
+
+			rAF( loop );
+		}
+
+		running = true;
+		loop();
+	}
+
+	function ease ( t ) {
+		return ( Math.pow( ( t - 1 ), 3 ) + 1 );
+	}
+
+	function convertPx ( str ) {
+		return +str.replace( 'px', '' );
+	}
+</script>
